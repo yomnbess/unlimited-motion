@@ -1,0 +1,51 @@
+:root {
+  --ink: #0d0c0b;
+  --charcoal: #16140f;
+  --panel: #1d1a14;
+  --rail: #2a261d;
+  --bone: #ede6d6;
+  --bone-dim: #a39c8a;
+  --amber: #e8762c;
+  --amber-dim: #8a4d22;
+  --safelight: #c23b2c;
+  --display: 'Fraunces', serif;
+  --body: 'Space Grotesk', sans-serif;
+  --mono: 'JetBrains Mono', monospace;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  padding: 0;
+  background: var(--ink);
+  color: var(--bone);
+  font-family: var(--body);
+}
+
+#root {
+  min-height: 100vh;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.001ms !important;
+    transition-duration: 0.001ms !important;
+  }
+}
+
+::selection {
+  background: var(--amber);
+  color: var(--ink);
+}
+
+a { color: inherit; }
+
+button:focus-visible,
+input:focus-visible,
+textarea:focus-visible,
+select:focus-visible,
+[tabindex]:focus-visible {
+  outline: 2px solid var(--amber);
+  outline-offset: 2px;
+}
