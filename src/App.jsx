@@ -18,6 +18,18 @@ function FilmIcon() {
   )
 }
 
+function emptyProfile() {
+  return {
+    id: Date.now(),
+    name: '',
+    visualIdentity: '',
+    styleLock: '',
+    lighting: '',
+    wardrobe: '',
+    anchorFrames: [],
+  }
+}
+
 export default function App() {
   const [apiKey, setApiKey] = useState('')
   const [mode, setMode] = useState('text') // 'text' | 'image'
@@ -34,6 +46,73 @@ export default function App() {
   const [resultUrl, setResultUrl] = useState(null)
   const [history, setHistory] = useState([])
   const fileInputRef = useRef(null)
+
+  // --- Character Passport integration ---
+  const [profiles, setProfiles] = useState([])
+  const [activeProfileId, setActiveProfileId] = useState(null)
+  const [showProfilePanel, setShowProfilePanel] = useState(false)
+  const [editingProfile, setEditingProfile] = useState(emptyProfile())
+  const [lastVariableChanged, setLastVariableChanged] = useState(null)
+  const [lastGenerationVariables, setLastGenerationVariables] = useState(null)
+  const anchorInputRef = useRef(null)
+
+  const activeProfile = profiles.find((p) => p.id === activeProfileId) || null
+
+  function saveProfile() {
+    if (!editingProfile.name.trim()) return
+    setProfiles((prev) => {
+      const exists = prev.find((p) => p.id === editingProfile.id)
+      if (exists) {
+        return prev.map((p) => (p.id === editingProfile.id ? editingProfile : p))
+      }
+      return [...prev, editingProfile]
+    })
+    setActiveProfileId(editingProfile.id)
+    setShowProfilePanel(false)
+  }
+
+  function startNewProfile() {
+    setEditingProfile(emptyProfile())
+    setShowProfilePanel(true)
+  }
+
+  function editProfile(p) {
+    setEditingProfile(p)
+    setShowProfilePanel(true)
+  }
+
+  function handleAnchorUpload(file) {
+    if (!file || !file.type.startsWith('image/')) return
+    const reader = new FileReader()
+    reader.onload = (e) => {
+      setEditingProfile((p) => ({
+        ...p,
+        anchorFrames: [...p.anchorFrames, e.target.result].slice(0, 4),
+      }))
+    }
+    reader.readAsDataURL(file)
+  }
+
+  // Builds the locked prompt language string injected into every generation
+  function buildLockedLanguage(profile) {
+    if (!profile) return ''
+    const parts = []
+    if (profile.visualIdentity.trim()) parts.push(profile.visualIdentity.trim())
+    if (profile.styleLock.trim()) parts.push(profile.styleLock.trim())
+    if (profile.lighting.trim()) parts.push(`lighting: ${profile.lighting.trim()}`)
+    if (profile.wardrobe.trim()) parts.push(`wearing ${profile.wardrobe.trim()}`)
+    return parts.join(', ')
+  }
+
+  function detectChangedVariable(newScene) {
+    // Scene Budget Rule: warn if more than one major variable changes
+    // between this generation and the last successful one.
+    if (!lastGenerationVariables) return null
+    const current = { scene: newScene, aspect, duration, mode }
+    const diffs = Object.keys(current).filter((k) => current[k] !== lastGenerationVariables[k])
+    return diffs
+  }
+
 
   const handleFile = useCallback((file) => {
     if (!file || !file.type.startsWith('image/')) return
@@ -60,18 +139,22 @@ export default function App() {
     setResultUrl(null)
     setProgress(0)
 
+    // Character Passport: prepend locked visual/style/wardrobe language so
+    // the user never has to retype it, and it can't be forgotten between
+    // generations — the core failure mode the Passport system protects against.
+    const lockedLanguage = buildLockedLanguage(activeProfile)
+    const finalPrompt = lockedLanguage ? `${lockedLanguage}. ${prompt}` : prompt
+
+    const changedVars = detectChangedVariable(finalPrompt)
+    setLastVariableChanged(changedVars)
+
     try {
-      // The real Kling API key lives server-side (KLING_API_KEY in Vercel
-      // env vars), never in the browser. This calls our own backend, which
-      // calls Kling. Until that env var is configured on the deployed
-      // project, /api/generate returns a clear "not configured" error and
-      // we fall back to the demo flow below.
       const submitRes = await fetch('/api/generate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           mode,
-          prompt,
+          prompt: finalPrompt,
           negativePrompt,
           aspectRatio: aspect,
           duration,
@@ -97,11 +180,13 @@ export default function App() {
         duration,
         thumb: imagePreview || null,
         videoUrl,
+        characterName: activeProfile?.name || null,
         createdAt: new Date().toLocaleTimeString(),
       }
       setHistory((h) => [result, ...h])
       setResultUrl(videoUrl)
       setStatus('done')
+      setLastGenerationVariables({ scene: finalPrompt, aspect, duration, mode })
     } catch (err) {
       // Backend not configured yet (e.g. running locally, or the Kling key
       // hasn't been added in Vercel) — fall back to the demo render so the
@@ -115,11 +200,13 @@ export default function App() {
           aspect,
           duration,
           thumb: imagePreview || null,
+          characterName: activeProfile?.name || null,
           createdAt: new Date().toLocaleTimeString(),
         }
         setHistory((h) => [placeholderResult, ...h])
         setResultUrl('demo')
         setStatus('done')
+        setLastGenerationVariables({ scene: finalPrompt, aspect, duration, mode })
         return
       }
       setErrorMsg(err.message || 'Generation failed. Check your API key and try again.')
@@ -149,6 +236,145 @@ export default function App() {
           <span className="reel-counter">REEL {String(history.length).padStart(3, '0')}</span>
         </div>
       </header>
+
+      <section className="character-bar">
+        <span className="eyebrow">CHARACTER PASSPORT</span>
+        <div className="character-chips">
+          <button
+            className={`char-chip ${!activeProfileId ? 'active' : ''}`}
+            onClick={() => setActiveProfileId(null)}
+          >
+            No profile
+          </button>
+          {profiles.map((p) => (
+            <button
+              key={p.id}
+              className={`char-chip ${activeProfileId === p.id ? 'active' : ''}`}
+              onClick={() => setActiveProfileId(p.id)}
+              onDoubleClick={() => editProfile(p)}
+              title="Double-click to edit"
+            >
+              {p.anchorFrames[0] && <img src={p.anchorFrames[0]} alt="" className="char-chip-thumb" />}
+              {p.name}
+            </button>
+          ))}
+          <button className="char-chip char-chip-add" onClick={startNewProfile}>
+            + New character
+          </button>
+        </div>
+        {activeProfile && (
+          <p className="character-locked-note">
+            Locked language active — injected into every generation until you switch or clear it.
+          </p>
+        )}
+      </section>
+
+      {showProfilePanel && (
+        <div className="profile-overlay" onClick={() => setShowProfilePanel(false)}>
+          <div className="profile-modal" onClick={(e) => e.stopPropagation()}>
+            <div className="profile-modal-header">
+              <span className="eyebrow">CHARACTER PASSPORT — EDIT</span>
+              <button className="close-btn" onClick={() => setShowProfilePanel(false)}>×</button>
+            </div>
+
+            <div className="field">
+              <label>Character name</label>
+              <input
+                type="text"
+                placeholder="e.g. Mira, Detective Cole..."
+                value={editingProfile.name}
+                onChange={(e) => setEditingProfile((p) => ({ ...p, name: e.target.value }))}
+              />
+            </div>
+
+            <div className="field">
+              <label>Visual identity block</label>
+              <textarea
+                placeholder="Structural language, not aesthetic — e.g. narrow jaw with defined angle, interpupillary distance ~40% of face width, hex #3a2418 skin tone with light freckling across nose bridge..."
+                value={editingProfile.visualIdentity}
+                onChange={(e) => setEditingProfile((p) => ({ ...p, visualIdentity: e.target.value }))}
+                rows={4}
+              />
+            </div>
+
+            <div className="field">
+              <label>Style lock</label>
+              <input
+                type="text"
+                placeholder="e.g. photorealistic, 35mm film grain, gritty documentary"
+                value={editingProfile.styleLock}
+                onChange={(e) => setEditingProfile((p) => ({ ...p, styleLock: e.target.value }))}
+              />
+            </div>
+
+            <div className="field-row">
+              <div className="field">
+                <label>Lighting signature</label>
+                <input
+                  type="text"
+                  placeholder="e.g. soft window light from left"
+                  value={editingProfile.lighting}
+                  onChange={(e) => setEditingProfile((p) => ({ ...p, lighting: e.target.value }))}
+                />
+              </div>
+              <div className="field">
+                <label>Wardrobe anchor</label>
+                <input
+                  type="text"
+                  placeholder="e.g. charcoal wool coat, brass buttons"
+                  value={editingProfile.wardrobe}
+                  onChange={(e) => setEditingProfile((p) => ({ ...p, wardrobe: e.target.value }))}
+                />
+              </div>
+            </div>
+
+            <div className="field">
+              <label>Anchor frames ({editingProfile.anchorFrames.length}/4)</label>
+              <div className="anchor-grid">
+                {editingProfile.anchorFrames.map((src, i) => (
+                  <div key={i} className="anchor-thumb">
+                    <img src={src} alt={`Anchor ${i + 1}`} />
+                    <button
+                      className="anchor-remove"
+                      onClick={() => setEditingProfile((p) => ({
+                        ...p,
+                        anchorFrames: p.anchorFrames.filter((_, idx) => idx !== i),
+                      }))}
+                    >×</button>
+                  </div>
+                ))}
+                {editingProfile.anchorFrames.length < 4 && (
+                  <div
+                    className="anchor-thumb anchor-add"
+                    onClick={() => anchorInputRef.current?.click()}
+                  >
+                    <span>+</span>
+                    <input
+                      ref={anchorInputRef}
+                      type="file"
+                      accept="image/*"
+                      hidden
+                      onChange={(e) => handleAnchorUpload(e.target.files?.[0])}
+                    />
+                  </div>
+                )}
+              </div>
+              <span className="hint">Front-facing, three-quarter, profile, close-up — your visual source of truth.</span>
+            </div>
+
+            <div className="profile-modal-actions">
+              <button className="ghost-btn" onClick={() => setShowProfilePanel(false)}>Cancel</button>
+              <button
+                className="generate-btn profile-save-btn"
+                disabled={!editingProfile.name.trim()}
+                onClick={saveProfile}
+              >
+                Save character
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       <main className="layout">
         <section className="panel control-panel">
@@ -279,6 +505,12 @@ export default function App() {
             <span className="hint">Your key never leaves your browser except to call Kling directly.</span>
           </div>
 
+          {activeProfile && lastVariableChanged && lastVariableChanged.length > 1 && (
+            <div className="budget-warning">
+              ⚠ Scene Budget Rule: {lastVariableChanged.length} variables changed since your last generation. For best consistency, change one at a time.
+            </div>
+          )}
+
           <button
             className="generate-btn"
             disabled={!canGenerate || status === 'submitting' || status === 'polling'}
@@ -349,7 +581,10 @@ export default function App() {
                 {history.map((h) => (
                   <div key={h.id} className="filmstrip-frame" title={h.prompt}>
                     {h.thumb ? <img src={h.thumb} alt="" /> : <div className="frame-blank" />}
-                    <span className="frame-meta">{h.createdAt}</span>
+                    <span className="frame-meta">
+                      {h.createdAt}
+                      {h.characterName && <span className="frame-character"> · {h.characterName}</span>}
+                    </span>
                   </div>
                 ))}
               </div>
